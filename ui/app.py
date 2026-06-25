@@ -23,6 +23,8 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b")
 KUBECONFIG = os.environ.get("KUBECONFIG", "/root/.kube/config")
 RUNBOOKS_DIR = Path(os.environ.get("RUNBOOKS_DIR", "/app/runbooks"))
+# where an uploaded kubeconfig is written (writable, survives reruns within session)
+UPLOAD_KUBECONFIG = os.environ.get("UPLOAD_KUBECONFIG", "/tmp/uploaded-kubeconfig")
 
 SYSTEM_PROMPT = (
     "You are a Kubernetes and Helm troubleshooting assistant. "
@@ -84,12 +86,25 @@ def ollama_up():
 
 
 # ---------- k8sgpt scan (detection only, no AI backend) ----------
+def active_kubeconfig():
+    """Uploaded kubeconfig wins; else the env/mounted one. Returns path or None."""
+    up = st.session_state.get("kubeconfig_path")
+    if up and os.path.isfile(up):
+        return up
+    if os.path.isfile(KUBECONFIG):
+        return KUBECONFIG
+    return None
+
+
 def run_k8sgpt():
     """Run k8sgpt analyze with JSON output. Returns (problems:list, raw:str, err:str)."""
+    kubeconfig = active_kubeconfig()
+    if not kubeconfig:
+        return [], "", "No kubeconfig. Upload one in the sidebar (or mount/pass via env)."
     cmd = [
         "k8sgpt", "analyze",
         "--output", "json",
-        "--kubeconfig", KUBECONFIG,
+        "--kubeconfig", kubeconfig,
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -161,6 +176,28 @@ with st.sidebar:
     st.markdown(f"**Model:** `{MODEL}`")
     st.markdown(f"**Ollama:** {'🟢 up' if ollama_up() else '🔴 down'}")
     st.markdown(f"**Runbooks:** {len(docs)} loaded")
+    st.divider()
+
+    st.subheader("Kubeconfig")
+    up = st.file_uploader(
+        "Upload kubeconfig (for cluster scan)",
+        type=None,
+        help="Used only by k8sgpt to read the cluster. Read-only recommended.",
+    )
+    if up is not None:
+        with open(UPLOAD_KUBECONFIG, "wb") as f:
+            f.write(up.getbuffer())
+        os.chmod(UPLOAD_KUBECONFIG, 0o600)
+        st.session_state.kubeconfig_path = UPLOAD_KUBECONFIG
+        st.success(f"Loaded: {up.name}")
+
+    active = active_kubeconfig()
+    if active:
+        src = "uploaded" if active == UPLOAD_KUBECONFIG else "env/mounted"
+        st.caption(f"🟢 kubeconfig active ({src})")
+    else:
+        st.caption("⚪ no kubeconfig — scan disabled, paste mode works")
+
     st.divider()
 
     st.subheader("Scan cluster")

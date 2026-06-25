@@ -114,7 +114,13 @@ Open **http://localhost:8080**.
 | **base64 env** (recommended) | `-e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)"` |
 | raw env | `-e KUBECONFIG_CONTENT="$(cat ~/.kube/config)"` |
 | mount file | `-v /path/to/kubeconfig:/root/.kube/config:ro` |
+| **upload in UI** | sidebar → **Upload kubeconfig** → k8sgpt uses it immediately |
 | none | paste-error mode still works |
+
+The UI upload button writes the file to `/tmp/uploaded-kubeconfig` (chmod 600)
+inside the container and k8sgpt uses it for scans. It takes precedence over the
+env/mounted one. Lost on container restart — re-upload, or use env/mount to
+persist.
 
 ### Airgap transfer (single file)
 ```bash
