@@ -1,0 +1,17 @@
+# secrets / cluster access — NEVER commit
+kubeconfig
+*.kubeconfig
+*.pem
+*.key
+
+# model blobs (huge, carried separately)
+ollama-data/
+
+# airgap bundles
+*.tar
+*.tar.gz
+
+# python
+__pycache__/
+*.pyc
+.venv/

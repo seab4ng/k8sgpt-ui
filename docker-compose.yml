@@ -1,0 +1,30 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ./ollama-data:/root/.ollama   # model blobs live here (carry into airgap)
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+      args:
+        K8SGPT_VERSION: "0.3.48"   # verify/bump at github.com/k8sgpt-ai/k8sgpt/releases
+    image: k8sgpt-ui:local
+    container_name: k8sgpt-ui
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_URL: "http://ollama:11434"
+      MODEL: "qwen2.5-coder:7b"
+      KUBECONFIG: "/root/.kube/config"
+    volumes:
+      # read-only kubeconfig for the cluster you want to scan.
+      # put your kubeconfig at ./kubeconfig (gitignored).
+      - ./kubeconfig:/root/.kube/config:ro
+    ports:
+      - "8501:8501"
+    restart: unless-stopped

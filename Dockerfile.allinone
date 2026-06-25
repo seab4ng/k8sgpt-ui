@@ -1,0 +1,61 @@
+# ============================================================================
+#  ALL-IN-ONE image: Ollama + model + k8sgpt + Streamlit UI in ONE container.
+#  Build OUTSIDE airgap (needs internet + pulls the model into the image),
+#  then `docker save` -> carry the tar in -> `docker load` -> run.
+#
+#  Build:
+#    docker build -f Dockerfile.allinone -t k8sgpt-ui:allinone .
+#  Run:
+#    docker run -d -p 8080:8080 \
+#      -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
+#      --name k8sgpt-ui k8sgpt-ui:allinone
+#  Open: http://localhost:8080
+# ============================================================================
+FROM ollama/ollama:latest
+
+# --- versions (verify/bump) ---
+ARG K8SGPT_VERSION=0.3.48
+ARG MODEL=qwen2.5-coder:7b
+ARG TARGETARCH=x86_64
+
+ENV OLLAMA_URL=http://localhost:11434 \
+    MODEL=${MODEL} \
+    KUBECONFIG=/root/.kube/config \
+    RUNBOOKS_DIR=/app/runbooks \
+    UI_PORT=8080 \
+    DEBIAN_FRONTEND=noninteractive
+
+# --- system deps: python + tools ---
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python3 python3-pip python3-venv curl ca-certificates tar coreutils procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- k8sgpt binary ---
+RUN curl -fsSL -o /tmp/k8sgpt.tar.gz \
+       "https://github.com/k8sgpt-ai/k8sgpt/releases/download/v${K8SGPT_VERSION}/k8sgpt_Linux_${TARGETARCH}.tar.gz" \
+    && tar -xzf /tmp/k8sgpt.tar.gz -C /usr/local/bin k8sgpt \
+    && chmod +x /usr/local/bin/k8sgpt \
+    && rm /tmp/k8sgpt.tar.gz
+
+# --- python deps (system, no venv needed in container) ---
+COPY ui/requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
+
+# --- app + runbooks ---
+COPY ui/app.py /app/app.py
+COPY runbooks /app/runbooks
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# --- bake the model into the image (the big layer) ---
+# start ollama, pull model, stop. Model blobs persist in /root/.ollama.
+RUN ollama serve & \
+    sleep 8 && \
+    ollama pull "${MODEL}" && \
+    pkill -f "ollama serve" || true
+
+WORKDIR /app
+EXPOSE 8080
+# override ollama base image's entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
