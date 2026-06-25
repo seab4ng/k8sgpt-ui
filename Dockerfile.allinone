@@ -49,11 +49,21 @@ COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # --- bake the model into the image (the big layer) ---
-# start ollama, pull model, stop. Model blobs persist in /root/.ollama.
-RUN ollama serve & \
-    sleep 8 && \
-    ollama pull "${MODEL}" && \
-    pkill -f "ollama serve" || true
+# start ollama, wait until ready, pull model, VERIFY it landed, stop.
+# Fails the build loudly if the pull/verify fails — never ship a model-less image.
+RUN set -eu; \
+    ollama serve & \
+    SERVE_PID=$!; \
+    for i in $(seq 1 60); do \
+        if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then break; fi; \
+        if [ "$i" = "60" ]; then echo "ERROR: ollama did not become ready"; exit 1; fi; \
+        sleep 1; \
+    done; \
+    echo "pulling ${MODEL}..."; \
+    ollama pull "${MODEL}"; \
+    ollama list | grep -q "${MODEL%%:*}" || { echo "ERROR: ${MODEL} not present after pull"; exit 1; }; \
+    echo "model baked OK:"; ollama list; \
+    kill "$SERVE_PID" 2>/dev/null || true
 
 WORKDIR /app
 EXPOSE 8080
