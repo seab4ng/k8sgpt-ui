@@ -1,0 +1,41 @@
+# k8sgpt-ui — all-in-one (Ollama + model + k8sgpt + UI + runbooks baked in by CI).
+#
+# This file is IDENTICAL on Windows and Linux: it uses NO host paths, so there is
+# nothing OS-specific to get wrong. Provide your cluster access by clicking
+# "Upload kubeconfig" in the UI sidebar.
+#
+#   docker compose up -d
+#   open http://localhost:8080
+#   docker compose down        # stop
+#
+# To bind-mount a kubeconfig from disk instead of uploading, use
+# docker-compose.with-kubeconfig.yml (see README.md).
+
+name: k8sgpt-ui
+
+services:
+  k8sgpt-ui:
+    image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:latest}
+    container_name: k8sgpt-ui
+    ports:
+      - "8080:8080"
+    environment:
+      # the app reads KUBECONFIG; an uploaded file overrides it at runtime
+      KUBECONFIG: "/root/.kube/config"
+      MODEL: "qwen2.5-coder:7b"
+      OLLAMA_URL: "http://localhost:11434"
+      # Streamlit behind a reverse proxy / Cloud Workstations: let the UI render + connect
+      STREAMLIT_SERVER_ENABLE_CORS: "false"
+      STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "false"
+      STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION: "false"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      # CPU-inference tuning (avoids cold-load 500s and context-overflow errors)
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_NUM_CTX: "8192"
+    restart: unless-stopped
+
+    # --- Resource limits (optional) ---
+    # By default the container already uses ALL host CPUs and RAM — leave these
+    # commented for max speed. Uncomment only to CAP usage.
+    # cpus: 8          # max cores (7B on CPU wants >= 8 for usable speed)
+    # mem_limit: 12g   # max RAM (7B q4 needs ~6 GB resident)
