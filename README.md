@@ -2,8 +2,12 @@
 
 Airgap troubleshooting assistant for **Helm** and **Kubernetes**. A web UI where
 you paste an error (or scan a cluster) and a **local** LLM suggests the fix —
-grounded in your own runbooks, with conversation context kept. No internet at
-runtime.
+grounded in your own runbooks, with conversation context kept. **No internet at
+runtime.**
+
+Everything (Ollama + the model + `k8sgpt` + the UI + runbooks) is baked into a
+**single image** at build time. You carry one image into the airgap and run one
+container — nothing is downloaded when it runs.
 
 ## What it does
 
@@ -20,130 +24,111 @@ Browser → Streamlit UI ──┬─ paste error → model (+ runbooks) → fix
          context kept in session
 ```
 
-- **Model:** `qwen2.5-coder:7b` via local **Ollama** (strong on YAML / Helm / k8s).
-- **k8sgpt:** binary baked into the UI image, used as a pure detector (no AI
-  backend wired into it — the UI's model does all explaining + holds context).
-- **Runbooks:** markdown in [`runbooks/`](runbooks/). Naive keyword retrieval
-  injects the best match as context (airgap-friendly, no embeddings needed).
+- **Model:** `qwen2.5-coder:3b` (default) or `qwen2.5-coder:7b`, via a local
+  **Ollama** baked into the image (strong on YAML / Helm / k8s).
+- **k8sgpt:** binary baked in, used as a pure detector (no AI backend wired into
+  it — the UI's model does all explaining + holds context). Supports scanning all
+  namespaces or specific ones.
+- **Runbooks:** markdown in [`runbooks/`](runbooks/). BM25 keyword retrieval
+  (airgap-friendly, no embeddings) optionally grounds answers; browse them in the
+  UI. Add your own — see below.
 
-## Components
+## Which image / model?
 
-| Container | Image | Role |
-|-----------|-------|------|
-| `ollama`  | `ollama/ollama` | runs the model |
-| `ui`      | built from [`ui/`](ui/) | Streamlit UI + `k8sgpt` binary |
+Each release publishes **two** images — pick by your speed/quality trade-off:
 
-## Size budget (airgap transfer)
+| Image tag | Model | Image size | Speed (CPU) | Use when |
+|-----------|-------|-----------|-------------|----------|
+| `…-qwen2.5-coder-3b` | 3B (Q4) | ~4 GB | ~2× faster | **default** — great for "explain + fix this error" |
+| `…-qwen2.5-coder-7b` | 7B (Q4) | ~7 GB | baseline | you want higher-quality reasoning |
 
-| Item | Size |
-|------|------|
-| ollama image | ~1.5 GB |
-| ui image (python + k8sgpt) | ~0.4 GB |
-| model `qwen2.5-coder:7b` (Q4) | ~4.7 GB |
-| **Total** | **~6.5 GB** |
+Runs CPU-only. **8 vCPU recommended** for responsive answers (4 works but is slow);
+RAM need is ~3 GB (3B) / ~6 GB (7B) resident. A GPU is the only way to make it
+genuinely fast.
 
-Runs fine on a **16 GB RAM CPU-only** box (model uses ~6–7 GB; answers in
-~20–60 s).
+## Run it (connected box)
 
-## Deploy
+With Docker Compose ([`docker-compose-files/`](docker-compose-files/) — works the
+same on Windows and Linux):
 
-### 1. Outside the airgap — build + pull + pack
 ```bash
-bash scripts/bundle.sh
-# produces ./airgap-bundle/ (images.tar + ollama-data + compose + runbooks + load.sh)
+cd docker-compose-files
+docker compose up -d
+# open http://localhost:8080
 ```
 
-### 2. Carry `airgap-bundle/` in (USB, ~6.5 GB).
+Provide cluster access by clicking **Upload kubeconfig** in the sidebar, or use
+`docker-compose.with-kubeconfig.yml` to bind-mount one. See
+[`docker-compose-files/README.md`](docker-compose-files/README.md).
 
-### 3. Inside the airgap — load + run
-```bash
-cd airgap-bundle
-# optional: drop your cluster kubeconfig here as ./kubeconfig (for scan mode)
-bash load.sh
-```
-
-Open **http://localhost:8501**.
-
-## Cluster scan setup (optional)
-
-Scan mode needs a read-only kubeconfig for the target cluster. Put it at
-`./kubeconfig`. The box running this must reach the cluster API server
-(`server:` URL in the kubeconfig, usually port 6443). One UI can scan many
-clusters — swap the kubeconfig.
-
-Paste-error mode needs **no** kubeconfig.
-
-## Config (env vars on the `ui` service)
-
-| Var | Default | Meaning |
-|-----|---------|---------|
-| `OLLAMA_URL` | `http://ollama:11434` | Ollama endpoint |
-| `MODEL` | `qwen2.5-coder:7b` | model name (must be pulled) |
-| `KUBECONFIG` | `/root/.kube/config` | kubeconfig path inside container |
-
-## Add your own runbooks
-
-Drop more `*.md` files into [`runbooks/`](runbooks/). One error per file:
-symptom → root cause → fix → confirm. Rebuild the UI image (or bind-mount the
-folder). Seeded examples: Helm pre-install hook conflict, Helm "another
-operation in progress", ImagePullBackOff, CrashLoopBackOff.
-
-## All-in-one single image (one container, no compose)
-
-Everything — Ollama + model + k8sgpt + UI — baked into **one** image. Run one
-container, open `http://localhost:8080`. Carry a single tar into the airgap.
-
-### Build (outside airgap)
-```bash
-bash scripts/bundle-allinone.sh        # -> k8sgpt-ui-allinone.tar (~6.5 GB)
-# or directly:
-docker build -f Dockerfile.allinone -t k8sgpt-ui:allinone .
-```
-
-### Run
+Or with plain `docker run`:
 ```bash
 docker run -d -p 8080:8080 \
   -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  --name k8sgpt-ui k8sgpt-ui:allinone
+  --name k8sgpt-ui sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b
 ```
-Open **http://localhost:8080**.
 
 ### Passing the kubeconfig (pick one)
 | Method | How |
 |--------|-----|
-| **base64 env** (recommended) | `-e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)"` |
+| **upload in UI** (simplest) | sidebar → **Upload kubeconfig** → used immediately |
+| base64 env | `-e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)"` |
 | raw env | `-e KUBECONFIG_CONTENT="$(cat ~/.kube/config)"` |
 | mount file | `-v /path/to/kubeconfig:/root/.kube/config:ro` |
-| **upload in UI** | sidebar → **Upload kubeconfig** → k8sgpt uses it immediately |
 | none | paste-error mode still works |
 
-The UI upload button writes the file to `/tmp/uploaded-kubeconfig` (chmod 600)
-inside the container and k8sgpt uses it for scans. It takes precedence over the
-env/mounted one. Lost on container restart — re-upload, or use env/mount to
-persist.
+The box running this must reach the cluster API server (`server:` URL in the
+kubeconfig). **GKE note:** a kubeconfig using the `gke-gcloud-auth-plugin` exec
+auth won't work inside the container (no `gcloud` there) — use a static/token
+kubeconfig, or upload through the UI. Paste-error mode needs no kubeconfig.
 
-### Airgap transfer (single file)
+## Airgap deploy (single file, zero runtime internet)
+
+The model is baked at **build time**; at **runtime nothing is pulled or
+downloaded**. Carry one tar in.
+
 ```bash
-# outside
+# OUTSIDE the airgap (internet) — build + save one tar (default model 3b)
 bash scripts/bundle-allinone.sh
-# carry k8sgpt-ui-allinone.tar in, then inside:
-docker load -i k8sgpt-ui-allinone.tar
-docker run -d -p 8080:8080 -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  --name k8sgpt-ui k8sgpt-ui:allinone
+#   -> k8sgpt-ui-local-qwen2.5-coder-3b.tar
+# (for 7B:  MODEL=qwen2.5-coder:7b bash scripts/bundle-allinone.sh)
+
+# carry the .tar in, then INSIDE the airgap:
+docker load -i k8sgpt-ui-local-qwen2.5-coder-3b.tar
+docker run -d -p 8080:8080 \
+  -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
+  --name k8sgpt-ui k8sgpt-ui:local-qwen2.5-coder-3b
+# open http://localhost:8080
 ```
 
-Inside the container: `entrypoint.sh` starts `ollama serve`, wires the
-kubeconfig from env, then launches the UI on `:8080`. Model is already baked in
-— no runtime pull.
+If you build via CI instead, pull the published image on a connected box and
+`docker save` it to a tar the same way.
 
-## CI — auto-build the image (GitHub Actions)
+> ⚠️ Do **not** mount a volume over `/root/.ollama` — that would hide the baked-in
+> model, and the container refuses to start (it never pulls at runtime, by design).
+
+## Build the image yourself
+
+Two Dockerfiles, identical except the baked model:
+```bash
+docker build -f Dockerfile.qwen2.5-coder-3b -t k8sgpt-ui:3b .   # ~4 GB
+docker build -f Dockerfile.qwen2.5-coder-7b -t k8sgpt-ui:7b .   # ~7 GB
+```
+Build needs internet (it pulls the model into the image). After that the image
+runs fully offline.
+
+## CI — release builds (GitHub Actions)
 
 [`.github/workflows/build-allinone.yml`](.github/workflows/build-allinone.yml)
-builds the all-in-one image (model baked in) and pushes it to **Docker Hub**
-`sokushinbutsu/k8sgpt-ui` on every push to `main`, on `v*` tags, or manually
-(Actions → build-allinone → Run).
+runs **only on a tag** (a plain branch push builds nothing). Each tag builds and
+pushes **both** images to Docker Hub `sokushinbutsu/k8sgpt-ui`:
 
-Override model / k8sgpt version when running manually (workflow inputs).
+```
+git tag 1.0.0 && git push origin 1.0.0
+#  -> sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b
+#  -> sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b
+```
+(A leading `v` is stripped: `v1.0.0` → `1.0.0-…`. No `latest` tag is published.)
 
 ### Required repo secrets
 Settings → Secrets and variables → Actions:
@@ -152,36 +137,36 @@ Settings → Secrets and variables → Actions:
 | `DOCKERHUB_USERNAME` | `sokushinbutsu` |
 | `DOCKERHUB_TOKEN` | Docker Hub access token (Account Settings → Security → New Access Token) |
 
-### Pull + run (connected box)
-```bash
-docker pull sokushinbutsu/k8sgpt-ui:allinone
-docker run -d -p 8080:8080 \
-  -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  sokushinbutsu/k8sgpt-ui:allinone
-```
-Open **http://localhost:8080**.
+## Config (runtime env vars)
 
-### Get it into the airgap
-Docker Hub is unreachable from the airgap. On a connected box:
-```bash
-docker pull sokushinbutsu/k8sgpt-ui:allinone
-docker save sokushinbutsu/k8sgpt-ui:allinone -o k8sgpt-ui.tar
-# carry k8sgpt-ui.tar in, then inside:
-docker load -i k8sgpt-ui.tar
-docker run -d -p 8080:8080 -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  sokushinbutsu/k8sgpt-ui:allinone
-```
+Most settings are baked into the image. These are the ones you may set at runtime:
 
-### Notes
-- Image is ~6.5 GB; the workflow frees runner disk before building.
-- Tags pushed: `allinone`, `latest` (on main), `allinone-<sha>`, and the git tag on `v*`.
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `KUBECONFIG_B64` / `KUBECONFIG_CONTENT` | – | inject a kubeconfig at startup |
+| `OLLAMA_KEEP_ALIVE` | `30m` | keep the model warm between queries |
+| `OLLAMA_NUM_CTX` | `8192` | model context window |
+| `MAX_SCAN_CHARS` | `9000` | cap on scan text fed to the model (trade completeness for speed) |
+| `STREAMLIT_SERVER_ENABLE_CORS` / `…_XSRF_PROTECTION` | – | set `false` behind a reverse proxy so the UI connects |
+
+> Do **not** set `MODEL` at runtime — it must match the model baked into the image
+> (the 3B image bakes 3B, the 7B image bakes 7B). Pick the model by choosing the
+> image tag.
+
+## Add your own runbooks
+
+Drop more `*.md` files into [`runbooks/`](runbooks/). One error per file:
+symptom → triage → root cause → fix → confirm, then rebuild the image. Seeded
+examples include CrashLoopBackOff, ImagePullBackOff, Helm hook/lock conflicts,
+stale admission webhooks, missing/duplicate CRDs, PVC/PV binding issues,
+ContainerCreating subPath, and container permission errors.
 
 ## Notes / limits
 
-- `k8sgpt` reads **cluster state**, not your terminal. A pure helm *client*
-  error (e.g. hook conflict) may leave nothing in the cluster → use **paste**
-  mode for those. Scan mode shines for broken pods/jobs/configs already live.
-- `K8SGPT_VERSION` is pinned in [`ui/Dockerfile`](ui/Dockerfile) and
-  [`docker-compose.yml`](docker-compose.yml). Verify/bump against
+- `k8sgpt` reads **cluster state**, not your terminal. A pure helm *client* error
+  (e.g. hook conflict) may leave nothing in the cluster → use **paste** mode.
+  Scan mode shines for broken pods/jobs/configs already live.
+- Chat history resets on browser refresh (kept only within a session) — use the
+  **Export chat** button (Markdown or PDF) to save a conversation.
+- `K8SGPT_VERSION` is pinned in the Dockerfiles; verify/bump against
   <https://github.com/k8sgpt-ai/k8sgpt/releases>.
-- Bigger model? Set `MODEL=qwen2.5-coder:14b` (~9 GB, tighter on 16 GB RAM).

@@ -6,6 +6,11 @@ by CI, so you don't build anything locally — Compose just pulls and runs it.
 Both files below run **identically on Windows and Linux** (Docker Desktop or Docker
 Engine + the `docker compose` plugin).
 
+> Images are published **per release** as `<version>-<model>` (there is no `latest`
+> tag). The compose files default to `1.0.0-qwen2.5-coder-3b`; if you tagged a
+> different version, set `K8SGPT_UI_IMAGE` (see "Common tweaks") so the tag exists
+> on Docker Hub.
+
 ## Option 1 — recommended (no host paths, zero OS quirks)
 
 ```bash
@@ -42,6 +47,8 @@ Use this if you'd rather not upload through the UI.
 | Change the port | edit `"8080:8080"` → `"<host>:8080"` |
 
 ## Notes on speed
-Inference here is CPU-bound. A 7B model wants **≥ 8 vCPU** for usable speed; RAM
-need is ~6 GB. The container uses all host cores by default — don't set `cpus:`
-unless you want to cap it. A GPU is the only way to make 7B genuinely fast.
+Inference here is CPU-bound. The default **3B** image is ~2× faster than the 7B and
+is plenty for "explain + fix this error." **≥ 8 vCPU** is recommended for responsive
+answers (4 works but is slow); RAM need is ~3 GB (3B) / ~6 GB (7B). The container
+uses all host cores by default — don't set `cpus:` unless you want to cap it. A GPU
+is the only way to make it genuinely fast.

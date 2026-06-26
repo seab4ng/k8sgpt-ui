@@ -1,12 +1,15 @@
-# k8sgpt-ui — all-in-one (Ollama + model + k8sgpt + UI + runbooks baked in by CI).
+# k8sgpt-ui — all-in-one (Ollama + model + k8sgpt + UI + runbooks baked into the image).
 #
-# This file is IDENTICAL on Windows and Linux: it uses NO host paths, so there is
-# nothing OS-specific to get wrong. Provide your cluster access by clicking
-# "Upload kubeconfig" in the UI sidebar.
+# IDENTICAL on Windows and Linux: it uses NO host paths, so there is nothing
+# OS-specific to get wrong. Provide cluster access by clicking "Upload kubeconfig"
+# in the UI sidebar.
 #
 #   docker compose up -d
 #   open http://localhost:8080
 #   docker compose down        # stop
+#
+# The MODEL is whatever is baked into the chosen image tag — do NOT set MODEL here,
+# or it may not match the baked model and the app will fail offline.
 #
 # To bind-mount a kubeconfig from disk instead of uploading, use
 # docker-compose.with-kubeconfig.yml (see README.md).
@@ -15,31 +18,27 @@ name: k8sgpt-ui
 
 services:
   k8sgpt-ui:
-    # Images are published per release as <version>-<model>, e.g.
-    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b   (smaller/faster, default)
-    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b   (larger/higher-quality)
+    # Images are published per release as <version>-<model>. Pick one:
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b   (default — smaller/faster)
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b   (larger/higher quality)
     # Override the tag with the K8SGPT_UI_IMAGE env var.
     image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b}
     container_name: k8sgpt-ui
     ports:
       - "8080:8080"
     environment:
-      # the app reads KUBECONFIG; an uploaded file overrides it at runtime
-      KUBECONFIG: "/root/.kube/config"
-      MODEL: "qwen2.5-coder:7b"
-      OLLAMA_URL: "http://localhost:11434"
       # Streamlit behind a reverse proxy / Cloud Workstations: let the UI render + connect
       STREAMLIT_SERVER_ENABLE_CORS: "false"
       STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "false"
       STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION: "false"
       STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
-      # CPU-inference tuning (avoids cold-load 500s and context-overflow errors)
+      # CPU-inference tuning (optional)
       OLLAMA_KEEP_ALIVE: "30m"
       OLLAMA_NUM_CTX: "8192"
     restart: unless-stopped
 
     # --- Resource limits (optional) ---
-    # By default the container already uses ALL host CPUs and RAM — leave these
-    # commented for max speed. Uncomment only to CAP usage.
-    # cpus: 8          # max cores (7B on CPU wants >= 8 for usable speed)
-    # mem_limit: 12g   # max RAM (7B q4 needs ~6 GB resident)
+    # By default the container uses ALL host CPUs and RAM — leave commented for max
+    # speed. Uncomment only to CAP usage.
+    # cpus: 8          # >= 8 vCPU recommended for usable speed on CPU
+    # mem_limit: 8g    # 3B q4 needs ~3 GB resident; 7B q4 ~6 GB
