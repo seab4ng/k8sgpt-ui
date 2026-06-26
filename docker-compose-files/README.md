@@ -37,8 +37,7 @@ Use this if you'd rather not upload through the UI.
 
 | Want to… | Do this |
 |---|---|
-| Use a specific image tag | `K8SGPT_UI_IMAGE=sokushinbutsu/k8sgpt-ui:v1.2.3 docker compose up -d` |
-| Change the model | edit `MODEL:` (e.g. `qwen2.5-coder:3b` for ~2× speed on CPU) |
+| Pick model / version | Images are published per release as `<version>-<model>`. Choose one: `K8SGPT_UI_IMAGE=sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b docker compose up -d` (default is the `-qwen2.5-coder-3b` build — smaller & ~2× faster on CPU) |
 | Limit CPU/RAM | uncomment `cpus:` / `mem_limit:` (default = use all host cores/RAM) |
 | Change the port | edit `"8080:8080"` → `"<host>:8080"` |
 

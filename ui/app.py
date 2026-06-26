@@ -21,6 +21,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 # --- config (env-overridable) ---
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
@@ -35,6 +36,10 @@ NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
 # cap how many past messages we resend each turn (bounds latency + context growth)
 MAX_HISTORY = int(os.environ.get("MAX_HISTORY_MESSAGES", "16"))
+# safety cap on the (already de-duplicated) scan text fed to the model. The full
+# results are always shown in the chat; this only bounds the model input on huge
+# clusters so a 7B model on CPU doesn't stall reading the prompt.
+MAX_SCAN_CHARS = int(os.environ.get("MAX_SCAN_CHARS", "9000"))
 
 SYSTEM_PROMPT = (
     "You are a Kubernetes and Helm troubleshooting assistant. "
@@ -252,6 +257,7 @@ def run_k8sgpt(namespaces=None):
 
 
 def findings_to_text(problems):
+    """Full rendering for DISPLAY — every finding, every pod, nothing dropped."""
     if not problems:
         return "k8sgpt found no problems in the cluster."
     lines = []
@@ -263,6 +269,33 @@ def findings_to_text(problems):
             txt = e.get("Text") if isinstance(e, dict) else str(e)
             lines.append(f"- {txt}")
     return "\n".join(lines)
+
+
+def findings_to_model_text(problems):
+    """Compact rendering for the MODEL — collapses repeated per-pod errors (the same
+    issue across replicas) into one line with a count. Keeps every DISTINCT issue, so
+    nothing meaningful is lost, but the prompt is far smaller (faster on CPU)."""
+    if not problems:
+        return "k8sgpt found no problems in the cluster."
+    out = []
+    for r in problems:
+        kind = r.get("kind", "?")
+        name = r.get("name", "?")
+        counts, order = {}, []
+        for e in r.get("error", []):
+            txt = e.get("Text") if isinstance(e, dict) else str(e)
+            # strip replicaset+pod hash suffixes (e.g. -64d85cf868-587bw) so per-pod
+            # duplicates of the same problem merge
+            norm = re.sub(r"-[a-f0-9]{6,10}-[a-z0-9]{5}\b", "", txt).strip()
+            if norm not in counts:
+                counts[norm] = 0
+                order.append(norm)
+            counts[norm] += 1
+        out.append(f"### {kind}/{name}")
+        for norm in order:
+            c = counts[norm]
+            out.append(f"- {norm}" + (f"  (x{c})" if c > 1 else ""))
+    return "\n".join(out)
 
 
 # ---------- chat plumbing ----------
@@ -285,6 +318,41 @@ def chat_to_markdown():
         who = "🧑 **User**" if m["role"] == "user" else "🤖 **Assistant**"
         parts.append(f"## {who}\n\n{m['content']}\n")
     return "\n".join(parts)
+
+
+def _latin1(s):
+    """Core PDF fonts are latin-1 only; replace anything else so export never crashes."""
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
+def chat_to_pdf():
+    """Render the current conversation as a simple PDF (lazy-imports fpdf2)."""
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    w = pdf.epw  # full content width; w=0 is unreliable in fpdf2 2.7.9
+
+    def block(text, size, style=""):
+        # explicit left-align + return to left margin on the next line — without this,
+        # fpdf2's default new_x=RIGHT pushes following lines to the right edge.
+        pdf.set_font("Helvetica", style, size)
+        pdf.multi_cell(
+            w, size * 0.5, _latin1(text),
+            new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="L",
+        )
+
+    block("k8sgpt-ui - chat export", 16, "B")
+    if APP_VERSION:
+        block(f"version {APP_VERSION}", 10, "I")
+    pdf.ln(3)
+    for m in visible_messages():
+        block("User" if m["role"] == "user" else "Assistant", 12, "B")
+        block(m["content"], 11, "")
+        pdf.ln(3)
+    return bytes(pdf.output())
 
 
 def trimmed_messages():
@@ -310,6 +378,13 @@ def send_to_model(user_content, display_content=None, extra_context=None):
     `extra_context` (e.g. runbook text) is attached to THIS request only and is never
     stored in history — keeps the conversation lean and stops it being resent forever.
     """
+    # If a previous generation was stopped mid-stream, its turn was left with a
+    # dangling user message (the assistant reply is saved only after streaming
+    # completes). Close it so the old question doesn't bleed into this new turn.
+    msgs = st.session_state.messages
+    if msgs and msgs[-1]["role"] == "user":
+        msgs.append({"role": "assistant", "content": "_(response stopped)_"})
+
     st.session_state.messages.append({"role": "user", "content": user_content})
     with st.chat_message("user"):
         st.markdown(display_content or user_content)
@@ -321,6 +396,7 @@ def send_to_model(user_content, display_content=None, extra_context=None):
 
     with st.chat_message("assistant"):
         box = st.empty()
+        box.markdown("⏳ _thinking… (a large prompt can take a while on CPU)_")
         acc = ""
         try:
             acc = _stream_into(box, sent)
@@ -336,7 +412,36 @@ def send_to_model(user_content, display_content=None, extra_context=None):
 
 
 # ---------- UI ----------
-st.set_page_config(page_title="k8sgpt-ui", page_icon="⎈", layout="wide")
+st.set_page_config(
+    page_title="k8sgpt-ui",
+    page_icon="⎈",
+    layout="wide",
+    menu_items={"about": "k8sgpt-ui — airgap Helm / Kubernetes troubleshooting assistant."},
+)
+# Hide just the "Made with Streamlit" footer branding (keeps the menu + Settings).
+st.markdown("<style>footer {visibility: hidden;}</style>", unsafe_allow_html=True)
+# Remove ONLY the "Print" item from the hamburger menu while keeping Settings/About.
+# Streamlit gives menu items no per-item id, so we match by label text via a tiny
+# same-origin helper iframe (height 0) that reaches into the parent document.
+components.html(
+    """
+    <script>
+    const doc = window.parent.document;
+    const REMOVE = ['Print'];   // add 'Record a screencast' here to drop that too
+    function scrub() {
+      doc.querySelectorAll('[data-testid="stActionButtonLabel"]').forEach(function (l) {
+        if (REMOVE.includes(l.textContent.trim())) {
+          const btn = l.closest('[data-testid="stActionButton"]');
+          if (btn) btn.style.display = 'none';
+        }
+      });
+    }
+    new MutationObserver(scrub).observe(doc.body, {childList: true, subtree: true});
+    scrub();
+    </script>
+    """,
+    height=0,
+)
 ensure_state()
 docs = load_runbooks()
 
@@ -416,9 +521,26 @@ with st.sidebar:
             st.session_state.last_scan_raw = raw
             st.session_state.last_scan_err = err
             if not raw and err:
-                st.error(f"k8sgpt failed:\n\n{err}")
+                # surface the real k8sgpt error in the chat (persistent + visible),
+                # not just a transient sidebar message
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            f"🔴 **k8sgpt scan failed** ({scope_lbl}) — the cluster "
+                            "could not be analyzed:\n\n"
+                            f"```\n{err.strip()}\n```\n\n"
+                            "Common cause: a kubeconfig / credentials problem — e.g. an "
+                            "expired token, the wrong context, or an unreachable API server."
+                        ),
+                    }
+                )
+                st.rerun()
             else:
-                st.session_state.pending_scan = findings_to_text(problems)
+                st.session_state.pending_scan = {
+                    "display": findings_to_text(problems),
+                    "model": findings_to_model_text(problems),
+                }
                 st.success(f"Found {len(problems)} issue(s) in {scope_lbl}. See chat.")
                 if err:
                     st.warning("k8sgpt reported warnings — see diagnostics below.")
@@ -445,15 +567,31 @@ with st.sidebar:
         runbooks_dialog(docs)
 
     st.divider()
+    st.markdown("**Export chat**")
+    has_chat = bool(visible_messages())
+    exp_name = st.text_input("File name", value="k8sgpt-chat", key="export_name").strip() or "k8sgpt-chat"
+    exp_fmt = st.radio("Format", ["Markdown (.md)", "PDF (.pdf)"], horizontal=True, key="export_fmt")
+    if exp_fmt.startswith("PDF"):
+        ext, mime = "pdf", "application/pdf"
+        try:
+            data = chat_to_pdf() if has_chat else b""
+        except Exception as e:
+            data = b""
+            has_chat = False
+            st.caption(f"⚠️ PDF export unavailable: {e}")
+    else:
+        ext, mime = "md", "text/markdown"
+        data = chat_to_markdown() if has_chat else ""
     st.download_button(
-        "⬇️ Export chat (.md)",
-        data=chat_to_markdown(),
-        file_name="k8sgpt-chat.md",
-        mime="text/markdown",
+        "⬇️ Download",
+        data=data,
+        file_name=f"{exp_name}.{ext}",
+        mime=mime,
         use_container_width=True,
-        disabled=not visible_messages(),
-        help="Download the current conversation as a markdown file (a mini runbook).",
+        disabled=not has_chat,
     )
+
+    st.divider()
     if st.button("🗑️ Clear conversation", use_container_width=True):
         st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         st.rerun()
@@ -467,20 +605,29 @@ for m in visible_messages():
 
 # handle a queued cluster scan
 if "pending_scan" in st.session_state:
-    summary = st.session_state.pop("pending_scan")
+    pend = st.session_state.pop("pending_scan")
+    summary = pend["display"]          # full, shown to the user
+    model_summary = pend["model"]      # compact (de-duplicated), sent to the model
+    truncated = False
+    if len(model_summary) > MAX_SCAN_CHARS:
+        model_summary = model_summary[:MAX_SCAN_CHARS]
+        truncated = True
     prompt = (
         "k8sgpt scanned the cluster and reported these findings. "
         "Explain the root cause(s) and give fix steps.\n\n"
-        f"{summary}"
+        f"{model_summary}"
     )
     extra, used = ("", [])
     if st.session_state.get("ground_runbooks"):
-        extra, used = runbook_context(summary, docs)
-    send_to_model(
-        prompt,
-        display_content="🔍 **Cluster scan results:**\n\n" + summary,
-        extra_context=extra or None,
-    )
+        extra, used = runbook_context(model_summary, docs)
+    display = "🔍 **Cluster scan results:**\n\n" + summary
+    if truncated:
+        display += (
+            "\n\n> ⚠️ Cluster is very large — even after de-duplication the findings "
+            "exceeded the model's input budget, so only the first part was analyzed. "
+            "All findings are shown above."
+        )
+    send_to_model(prompt, display_content=display, extra_context=extra or None)
     if used:
         st.caption("📖 Grounded in runbooks: " + ", ".join(used))
 

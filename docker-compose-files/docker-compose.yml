@@ -15,7 +15,11 @@ name: k8sgpt-ui
 
 services:
   k8sgpt-ui:
-    image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:latest}
+    # Images are published per release as <version>-<model>, e.g.
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b   (smaller/faster, default)
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b   (larger/higher-quality)
+    # Override the tag with the K8SGPT_UI_IMAGE env var.
+    image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b}
     container_name: k8sgpt-ui
     ports:
       - "8080:8080"

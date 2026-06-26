@@ -1,0 +1,74 @@
+# ============================================================================
+#  ALL-IN-ONE image (qwen2.5-coder:3b): Ollama + model + k8sgpt + Streamlit UI.
+#  Build OUTSIDE airgap (needs internet + bakes the model into the image),
+#  then `docker save` -> carry the tar in -> `docker load` -> run.
+#
+#  Build:
+#    docker build -f Dockerfile.qwen2.5-coder-3b -t k8sgpt-ui:3b .
+#  Run:
+#    docker run -d -p 8080:8080 \
+#      -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
+#      --name k8sgpt-ui k8sgpt-ui:3b
+#  Open: http://localhost:8080
+# ============================================================================
+FROM ollama/ollama:latest
+
+# --- versions (verify/bump) ---
+ARG K8SGPT_VERSION=0.3.48
+ARG MODEL=qwen2.5-coder:3b
+ARG TARGETARCH=x86_64
+# app version shown in the UI; set by CI from the git tag (e.g. 1.0.0), "dev" otherwise
+ARG APP_VERSION=dev
+
+ENV OLLAMA_URL=http://localhost:11434 \
+    MODEL=${MODEL} \
+    APP_VERSION=${APP_VERSION} \
+    KUBECONFIG=/root/.kube/config \
+    RUNBOOKS_DIR=/app/runbooks \
+    UI_PORT=8080 \
+    DEBIAN_FRONTEND=noninteractive
+
+# --- system deps: python + tools ---
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python3 python3-pip python3-venv curl ca-certificates tar coreutils procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- k8sgpt binary ---
+RUN curl -fsSL -o /tmp/k8sgpt.tar.gz \
+       "https://github.com/k8sgpt-ai/k8sgpt/releases/download/v${K8SGPT_VERSION}/k8sgpt_Linux_${TARGETARCH}.tar.gz" \
+    && tar -xzf /tmp/k8sgpt.tar.gz -C /usr/local/bin k8sgpt \
+    && chmod +x /usr/local/bin/k8sgpt \
+    && rm /tmp/k8sgpt.tar.gz
+
+# --- python deps (system, no venv needed in container) ---
+COPY ui/requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
+
+# --- app + runbooks ---
+COPY ui/app.py /app/app.py
+COPY runbooks /app/runbooks
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# --- bake the model into the image (the big layer) ---
+# start ollama, wait until ready, pull model, VERIFY it landed, stop.
+# Fails the build loudly if the pull/verify fails — never ship a model-less image.
+RUN set -eu; \
+    ollama serve & \
+    SERVE_PID=$!; \
+    for i in $(seq 1 60); do \
+        if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then break; fi; \
+        if [ "$i" = "60" ]; then echo "ERROR: ollama did not become ready"; exit 1; fi; \
+        sleep 1; \
+    done; \
+    echo "pulling ${MODEL}..."; \
+    ollama pull "${MODEL}"; \
+    ollama list | grep -q "${MODEL%%:*}" || { echo "ERROR: ${MODEL} not present after pull"; exit 1; }; \
+    echo "model baked OK:"; ollama list; \
+    kill "$SERVE_PID" 2>/dev/null || true
+
+WORKDIR /app
+EXPOSE 8080
+# override ollama base image's entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
