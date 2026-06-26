@@ -56,16 +56,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Clean version string for the UI: "2.0.0" on a tag (v-prefix stripped),
+      # "dev-<sha>" on a normal branch push.
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          # latest=auto -> "latest" is published ONLY for semver tag builds (releases),
+          # never on a plain branch push.
+          flavor: latest=auto
           tags: |
             type=raw,value=allinone
-            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=allinone-
-            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build & push all-in-one
         uses: docker/build-push-action@v6
@@ -78,4 +92,5 @@ jobs:
           build-args: |
             MODEL=${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}
             K8SGPT_VERSION=${{ github.event.inputs.k8sgpt_version || '0.3.48' }}
+            APP_VERSION=${{ steps.ver.outputs.value }}
           provenance: false

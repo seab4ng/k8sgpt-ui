@@ -13,6 +13,7 @@ into the image). No internet required at runtime.
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -24,6 +25,8 @@ import streamlit as st
 # --- config (env-overridable) ---
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b")
+# build-time version (set via APP_VERSION build-arg/env; blank in local dev)
+APP_VERSION = os.environ.get("APP_VERSION", "").strip()
 RUNBOOKS_DIR = Path(os.environ.get("RUNBOOKS_DIR", "/app/runbooks"))
 # where an uploaded kubeconfig is written (writable, survives reruns within session)
 UPLOAD_KUBECONFIG = os.environ.get("UPLOAD_KUBECONFIG", "/tmp/uploaded-kubeconfig")
@@ -92,15 +95,52 @@ def load_runbooks():
     return docs
 
 
-def retrieve(query, docs, k=3):
-    """Score docs by overlap of query word-stems with doc text. Cheap, no embeddings."""
-    words = {w for w in re.findall(r"[a-zA-Z0-9.-]{3,}", query.lower())}
+def _tokenize(text):
+    return re.findall(r"[a-z0-9.-]{3,}", text.lower())
+
+
+@st.cache_data(show_spinner=False)
+def build_index(docs):
+    """Tiny BM25 index over the runbooks. Pure-python, no deps, no network."""
+    corpus = [(name, _tokenize(text)) for name, text in docs]
+    n_docs = len(corpus)
+    df = {}
+    for _, toks in corpus:
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    avgdl = (sum(len(toks) for _, toks in corpus) / n_docs) if n_docs else 0.0
+    idf = {t: math.log(1 + (n_docs - c + 0.5) / (c + 0.5)) for t, c in df.items()}
+    tfs = []
+    for name, toks in corpus:
+        tf = {}
+        for t in toks:
+            tf[t] = tf.get(t, 0) + 1
+        tfs.append((name, tf, len(toks)))
+    return {"tfs": tfs, "idf": idf, "avgdl": avgdl}
+
+
+def retrieve(query, docs, k=3, k1=1.5, b=0.75):
+    """BM25 ranking of runbooks for a query. Returns [(score, name, text), ...].
+
+    BM25 beats raw keyword counts: it discounts common words (idf) and normalises
+    for doc length, so the right runbook surfaces instead of the longest one."""
+    if not docs:
+        return []
+    index = build_index(docs)
+    avgdl = index["avgdl"] or 1.0
+    text_by_name = dict(docs)
+    q = set(_tokenize(query))
     scored = []
-    for name, text in docs:
-        low = text.lower()
-        score = sum(low.count(w) for w in words)
-        if score:
-            scored.append((score, name, text))
+    for name, tf, dl in index["tfs"]:
+        score = 0.0
+        for t in q:
+            f = tf.get(t)
+            if not f:
+                continue
+            idf = index["idf"].get(t, 0.0)
+            score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+        if score > 0:
+            scored.append((score, name, text_by_name[name]))
     scored.sort(reverse=True)
     return scored[:k]
 
@@ -155,8 +195,13 @@ def ollama_up():
 
 
 # ---------- k8sgpt scan (detection only, no AI backend) ----------
-def run_k8sgpt():
+def run_k8sgpt(namespaces=None):
     """Run k8sgpt analyze with JSON output.
+
+    namespaces: None/empty -> whole cluster (all namespaces). A list -> run once per
+    namespace and merge (k8sgpt's --namespace takes a single namespace), deduped by
+    (kind, name).
+
     Returns (problems:list, raw:str, err:str). `err` carries stderr/diagnostics even
     when problems are found, so the UI can always surface it."""
     kubeconfig = active_kubeconfig()
@@ -165,24 +210,45 @@ def run_k8sgpt():
             "No kubeconfig found. Upload one in the sidebar, or mount it to a standard "
             "path (~/.kube/config, /root/.kube/config)."
         )
-    cmd = ["k8sgpt", "analyze", "--output", "json", "--kubeconfig", kubeconfig]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except FileNotFoundError:
-        return [], "", "k8sgpt binary not found in image."
-    except subprocess.TimeoutExpired:
-        return [], "", "k8sgpt timed out after 120s (cluster unreachable / token expired?)."
 
-    out = proc.stdout.strip()
-    stderr = proc.stderr.strip()
-    if not out:
-        return [], "", stderr or f"k8sgpt produced no output (exit {proc.returncode})."
-    try:
-        data = json.loads(out)
-        # stderr returned as non-fatal diagnostics (e.g. deprecation warnings)
-        return data.get("results", []), out, stderr
-    except json.JSONDecodeError:
-        return [], out, stderr or "k8sgpt output was not valid JSON."
+    base = ["k8sgpt", "analyze", "--output", "json", "--kubeconfig", kubeconfig]
+    targets = namespaces if namespaces else [None]  # None -> all namespaces
+
+    problems, raws, errs = [], [], []
+    seen = set()
+    for ns in targets:
+        cmd = base + (["--namespace", ns] if ns else [])
+        label = ns or "all"
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except FileNotFoundError:
+            return [], "", "k8sgpt binary not found in image."
+        except subprocess.TimeoutExpired:
+            errs.append(f"[{label}] k8sgpt timed out after 120s (cluster unreachable / token expired?).")
+            continue
+
+        out = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        if stderr:
+            errs.append(f"[{label}] {stderr}")
+        if not out:
+            errs.append(f"[{label}] no output (exit {proc.returncode}).")
+            continue
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            errs.append(f"[{label}] output was not valid JSON.")
+            raws.append(out)
+            continue
+        raws.append(out)
+        for r in data.get("results", []):
+            key = (r.get("kind"), r.get("name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            problems.append(r)
+
+    return problems, "\n".join(raws), "\n".join(e for e in errs if e)
 
 
 def findings_to_text(problems):
@@ -207,6 +273,18 @@ def ensure_state():
 
 def visible_messages():
     return [m for m in st.session_state.messages if m["role"] != "system"]
+
+
+def chat_to_markdown():
+    """Render the current conversation as a self-contained markdown doc (a mini runbook)."""
+    header = "# k8sgpt-ui — chat export"
+    if APP_VERSION:
+        header += f"\n\n_version {APP_VERSION}_"
+    parts = [header, ""]
+    for m in visible_messages():
+        who = "🧑 **User**" if m["role"] == "user" else "🤖 **Assistant**"
+        parts.append(f"## {who}\n\n{m['content']}\n")
+    return "\n".join(parts)
 
 
 def trimmed_messages():
@@ -280,7 +358,12 @@ def runbooks_dialog(all_docs):
     st.markdown(dict(all_docs).get(sel, ""))
 
 with st.sidebar:
-    st.title("⎈ k8sgpt-ui")
+    ver = (
+        f" <span style='font-size:0.45em;color:#888;vertical-align:middle;'>{APP_VERSION}</span>"
+        if APP_VERSION
+        else ""
+    )
+    st.markdown(f"<h1 style='margin-bottom:0'>⎈ k8sgpt-ui{ver}</h1>", unsafe_allow_html=True)
     st.caption("Airgap Helm / k8s troubleshooting")
     st.markdown(f"**Model:** `{MODEL}`")
     st.markdown(f"**Ollama:** {'🟢 up' if ollama_up() else '🔴 down'}")
@@ -312,18 +395,33 @@ with st.sidebar:
 
     st.subheader("Scan cluster")
     st.caption("Runs k8sgpt to auto-detect problems in the cluster (no error text needed).")
+    scope = st.radio("Scope", ["All namespaces", "Specific namespace(s)"], key="scan_scope")
+    ns_list = None
+    if scope == "Specific namespace(s)":
+        raw_ns = st.text_input(
+            "Namespaces (comma-separated)",
+            placeholder="default, kube-system, argocd",
+            key="scan_ns",
+            help="One or more namespaces. k8sgpt is run once per namespace and results merged.",
+        )
+        ns_list = [n.strip() for n in raw_ns.split(",") if n.strip()] or None
+
     if st.button("🔍 Scan with k8sgpt", use_container_width=True, disabled=active is None):
-        with st.spinner("Running k8sgpt..."):
-            problems, raw, err = run_k8sgpt()
-        st.session_state.last_scan_raw = raw
-        st.session_state.last_scan_err = err
-        if not raw and err:
-            st.error(f"k8sgpt failed:\n\n{err}")
+        if scope == "Specific namespace(s)" and not ns_list:
+            st.warning("Enter at least one namespace, or choose 'All namespaces'.")
         else:
-            st.session_state.pending_scan = findings_to_text(problems)
-            st.success(f"Found {len(problems)} issue(s). See chat.")
-            if err:
-                st.warning("k8sgpt reported warnings — see diagnostics below.")
+            scope_lbl = "all namespaces" if not ns_list else ", ".join(ns_list)
+            with st.spinner(f"Running k8sgpt on {scope_lbl}..."):
+                problems, raw, err = run_k8sgpt(ns_list)
+            st.session_state.last_scan_raw = raw
+            st.session_state.last_scan_err = err
+            if not raw and err:
+                st.error(f"k8sgpt failed:\n\n{err}")
+            else:
+                st.session_state.pending_scan = findings_to_text(problems)
+                st.success(f"Found {len(problems)} issue(s) in {scope_lbl}. See chat.")
+                if err:
+                    st.warning("k8sgpt reported warnings — see diagnostics below.")
 
     if st.session_state.get("last_scan_raw") or st.session_state.get("last_scan_err"):
         with st.expander("🛠️ Last scan diagnostics"):
@@ -347,6 +445,15 @@ with st.sidebar:
         runbooks_dialog(docs)
 
     st.divider()
+    st.download_button(
+        "⬇️ Export chat (.md)",
+        data=chat_to_markdown(),
+        file_name="k8sgpt-chat.md",
+        mime="text/markdown",
+        use_container_width=True,
+        disabled=not visible_messages(),
+        help="Download the current conversation as a markdown file (a mini runbook).",
+    )
     if st.button("🗑️ Clear conversation", use_container_width=True):
         st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         st.rerun()

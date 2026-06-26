@@ -17,9 +17,12 @@ FROM ollama/ollama:latest
 ARG K8SGPT_VERSION=0.3.48
 ARG MODEL=qwen2.5-coder:7b
 ARG TARGETARCH=x86_64
+# app version shown in the UI; set by CI from the git tag (e.g. 2.0.0), "dev" otherwise
+ARG APP_VERSION=dev
 
 ENV OLLAMA_URL=http://localhost:11434 \
     MODEL=${MODEL} \
+    APP_VERSION=${APP_VERSION} \
     KUBECONFIG=/root/.kube/config \
     RUNBOOKS_DIR=/app/runbooks \
     UI_PORT=8080 \

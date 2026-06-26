@@ -36,6 +36,16 @@ if ! ollama list 2>/dev/null | grep -q "${MODEL%%:*}"; then
     ollama pull "${MODEL}" || echo "[entrypoint] WARN: model pull failed (airgap?)"
 fi
 
+# --- warm the model in the background so the first user query isn't a cold load ---
+# (runs in parallel; UI comes up immediately, model loads into RAM meanwhile)
+(
+    curl -fsS http://localhost:11434/api/generate \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"ok\",\"stream\":false,\"keep_alive\":\"30m\"}" \
+        >/dev/null 2>&1 \
+        && echo "[entrypoint] model warm" \
+        || echo "[entrypoint] model warm-up skipped/failed (non-fatal)"
+) &
+
 # --- run the UI in foreground on UI_PORT ---
 echo "[entrypoint] starting UI on :${UI_PORT}"
 exec python3 -m streamlit run /app/app.py \
