@@ -25,7 +25,7 @@ import streamlit.components.v1 as components
 
 # --- config (env-overridable) ---
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
-MODEL = os.environ.get("MODEL", "qwen2.5-coder:7b")
+MODEL = os.environ.get("MODEL", "gemma3:4b")
 # build-time version (set via APP_VERSION build-arg/env; blank in local dev)
 APP_VERSION = os.environ.get("APP_VERSION", "").strip()
 RUNBOOKS_DIR = Path(os.environ.get("RUNBOOKS_DIR", "/app/runbooks"))
@@ -368,6 +368,8 @@ def _stream_into(box, sent):
     acc = ""
     for chunk in stream_chat(sent):
         acc += chunk
+        # persist partial text so it survives if the user stops mid-stream
+        st.session_state["_partial_response"] = acc
         box.markdown(acc)
     return acc
 
@@ -380,11 +382,15 @@ def send_to_model(user_content, display_content=None, extra_context=None):
     """
     # If a previous generation was stopped mid-stream, its turn was left with a
     # dangling user message (the assistant reply is saved only after streaming
-    # completes). Close it so the old question doesn't bleed into this new turn.
+    # completes). Close it with whatever partial text was already streamed, so the
+    # user's stopped answer is preserved in chat history.
     msgs = st.session_state.messages
     if msgs and msgs[-1]["role"] == "user":
-        msgs.append({"role": "assistant", "content": "_(response stopped)_"})
+        partial = st.session_state.pop("_partial_response", "")
+        closing = partial.rstrip() if partial.strip() else "_(response stopped)_"
+        msgs.append({"role": "assistant", "content": closing})
 
+    st.session_state.pop("_partial_response", None)
     st.session_state.messages.append({"role": "user", "content": user_content})
     with st.chat_message("user"):
         st.markdown(display_content or user_content)
@@ -408,6 +414,7 @@ def send_to_model(user_content, display_content=None, extra_context=None):
             except Exception as e:
                 acc = f"⚠️ Model error: {e}"
                 box.markdown(acc)
+    st.session_state.pop("_partial_response", None)
     st.session_state.messages.append({"role": "assistant", "content": acc})
 
 
@@ -443,6 +450,17 @@ components.html(
     height=0,
 )
 ensure_state()
+
+# Fix any dangling turn left by a stopped generation — runs BEFORE history replay
+# so the partial answer stays visible immediately after the user clicks Stop.
+_msgs = st.session_state.messages
+if _msgs and _msgs[-1]["role"] == "user":
+    _partial = st.session_state.pop("_partial_response", "")
+    _closing = _partial.rstrip() if _partial.strip() else "_(response stopped)_"
+    _msgs.append({"role": "assistant", "content": _closing})
+else:
+    st.session_state.pop("_partial_response", None)
+
 docs = load_runbooks()
 
 

@@ -24,8 +24,8 @@ Browser → Streamlit UI ──┬─ paste error → model (+ runbooks) → fix
          context kept in session
 ```
 
-- **Model:** `qwen2.5-coder:3b` (default) or `qwen2.5-coder:7b`, via a local
-  **Ollama** baked into the image (strong on YAML / Helm / k8s).
+- **Model:** `gemma3:4b` (default) or `gemma2:9b`, via a local
+  **Ollama** baked into the image.
 - **k8sgpt:** binary baked in, used as a pure detector (no AI backend wired into
   it — the UI's model does all explaining + holds context). Supports scanning all
   namespaces or specific ones.
@@ -39,11 +39,11 @@ Each release publishes **two** images — pick by your speed/quality trade-off:
 
 | Image tag | Model | Image size | Speed (CPU) | Use when |
 |-----------|-------|-----------|-------------|----------|
-| `…-qwen2.5-coder-3b` | 3B (Q4) | ~4 GB | ~2× faster | **default** — great for "explain + fix this error" |
-| `…-qwen2.5-coder-7b` | 7B (Q4) | ~7 GB | baseline | you want higher-quality reasoning |
+| `…-gemma3-4b` | Gemma 3 4B (Q4) | ~4 GB | faster | **default** — great for "explain + fix this error" |
+| `…-gemma2-9b` | Gemma 2 9B (Q4) | ~7 GB | baseline | you want higher-quality reasoning |
 
 Runs CPU-only. **8 vCPU recommended** for responsive answers (4 works but is slow);
-RAM need is ~3 GB (3B) / ~6 GB (7B) resident. A GPU is the only way to make it
+RAM need is ~3 GB (4B) / ~7 GB (9B) resident. A GPU is the only way to make it
 genuinely fast.
 
 ## Run it (connected box)
@@ -65,7 +65,7 @@ Or with plain `docker run`:
 ```bash
 docker run -d -p 8080:8080 \
   -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  --name k8sgpt-ui sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b
+  --name k8sgpt-ui sokushinbutsu/k8sgpt-ui:1.0.0-gemma3-4b
 ```
 
 ### Passing the kubeconfig (pick one)
@@ -88,31 +88,31 @@ The model is baked at **build time**; at **runtime nothing is pulled or
 downloaded**. Carry one tar in.
 
 ```bash
-# OUTSIDE the airgap (internet) — build + save one tar (default model 3b)
+# OUTSIDE the airgap (internet) — build + save one tar (default model gemma3:4b)
 bash scripts/bundle-allinone.sh
-#   -> k8sgpt-ui-local-qwen2.5-coder-3b.tar
-# (for 7B:  MODEL=qwen2.5-coder:7b bash scripts/bundle-allinone.sh)
+#   -> k8sgpt-ui-local-gemma3-4b.tar
+# (for 9B:  MODEL=gemma2:9b bash scripts/bundle-allinone.sh)
 
 # carry the .tar in, then INSIDE the airgap:
-docker load -i k8sgpt-ui-local-qwen2.5-coder-3b.tar
+docker load -i k8sgpt-ui-local-gemma3-4b.tar
 docker run -d -p 8080:8080 \
   -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-  --name k8sgpt-ui k8sgpt-ui:local-qwen2.5-coder-3b
+  --name k8sgpt-ui k8sgpt-ui:local-gemma3-4b
 # open http://localhost:8080
 ```
 
 If you build via CI instead, pull the published image on a connected box and
 `docker save` it to a tar the same way.
 
-> ⚠️ Do **not** mount a volume over `/root/.ollama` — that would hide the baked-in
+> Do **not** mount a volume over `/root/.ollama` — that would hide the baked-in
 > model, and the container refuses to start (it never pulls at runtime, by design).
 
 ## Build the image yourself
 
 Two Dockerfiles, identical except the baked model:
 ```bash
-docker build -f Dockerfile.qwen2.5-coder-3b -t k8sgpt-ui:3b .   # ~4 GB
-docker build -f Dockerfile.qwen2.5-coder-7b -t k8sgpt-ui:7b .   # ~7 GB
+docker build -f Dockerfile.gemma3-4b -t k8sgpt-ui:gemma3-4b .   # ~4 GB
+docker build -f Dockerfile.gemma2-9b -t k8sgpt-ui:gemma2-9b .   # ~7 GB
 ```
 Build needs internet (it pulls the model into the image). After that the image
 runs fully offline.
@@ -125,8 +125,8 @@ pushes **both** images to Docker Hub `sokushinbutsu/k8sgpt-ui`:
 
 ```
 git tag 1.0.0 && git push origin 1.0.0
-#  -> sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b
-#  -> sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b
+#  -> sokushinbutsu/k8sgpt-ui:1.0.0-gemma3-4b
+#  -> sokushinbutsu/k8sgpt-ui:1.0.0-gemma2-9b
 ```
 (A leading `v` is stripped: `v1.0.0` → `1.0.0-…`. No `latest` tag is published.)
 
@@ -150,8 +150,8 @@ Most settings are baked into the image. These are the ones you may set at runtim
 | `STREAMLIT_SERVER_ENABLE_CORS` / `…_XSRF_PROTECTION` | – | set `false` behind a reverse proxy so the UI connects |
 
 > Do **not** set `MODEL` at runtime — it must match the model baked into the image
-> (the 3B image bakes 3B, the 7B image bakes 7B). Pick the model by choosing the
-> image tag.
+> (the 4B image bakes gemma3:4b, the 9B image bakes gemma2:9b). Pick the model by
+> choosing the image tag.
 
 ## Add your own runbooks
 

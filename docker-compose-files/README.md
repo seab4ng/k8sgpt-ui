@@ -7,7 +7,7 @@ Both files below run **identically on Windows and Linux** (Docker Desktop or Doc
 Engine + the `docker compose` plugin).
 
 > Images are published **per release** as `<version>-<model>` (there is no `latest`
-> tag). The compose files default to `1.0.0-qwen2.5-coder-3b`; if you tagged a
+> tag). The compose files default to `1.0.0-gemma3-4b`; if you tagged a
 > different version, set `K8SGPT_UI_IMAGE` (see "Common tweaks") so the tag exists
 > on Docker Hub.
 
@@ -42,13 +42,13 @@ Use this if you'd rather not upload through the UI.
 
 | Want to… | Do this |
 |---|---|
-| Pick model / version | Images are published per release as `<version>-<model>`. Choose one: `K8SGPT_UI_IMAGE=sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b docker compose up -d` (default is the `-qwen2.5-coder-3b` build — smaller & ~2× faster on CPU) |
+| Pick model / version | Images are published per release as `<version>-<model>`. Choose one: `K8SGPT_UI_IMAGE=sokushinbutsu/k8sgpt-ui:1.0.0-gemma2-9b docker compose up -d` (default is the `-gemma3-4b` build — smaller & faster on CPU) |
 | Limit CPU/RAM | uncomment `cpus:` / `mem_limit:` (default = use all host cores/RAM) |
 | Change the port | edit `"8080:8080"` → `"<host>:8080"` |
 
 ## Notes on speed
-Inference here is CPU-bound. The default **3B** image is ~2× faster than the 7B and
+Inference here is CPU-bound. The default **gemma3:4b** image is faster than gemma2:9b and
 is plenty for "explain + fix this error." **≥ 8 vCPU** is recommended for responsive
-answers (4 works but is slow); RAM need is ~3 GB (3B) / ~6 GB (7B). The container
+answers (4 works but is slow); RAM need is ~3 GB (4B) / ~7 GB (9B). The container
 uses all host cores by default — don't set `cpus:` unless you want to cap it. A GPU
 is the only way to make it genuinely fast.

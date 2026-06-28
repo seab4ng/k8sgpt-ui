@@ -4,19 +4,19 @@
 # downloaded, so the container works with zero internet.
 #
 # Usage:
-#   scripts/bundle-allinone.sh                       # default model qwen2.5-coder:3b
-#   MODEL=qwen2.5-coder:7b scripts/bundle-allinone.sh
+#   scripts/bundle-allinone.sh                       # default model gemma3:4b
+#   MODEL=gemma2:9b scripts/bundle-allinone.sh
 set -euo pipefail
 
-# pick the model: qwen2.5-coder:3b (default, smaller/faster) or qwen2.5-coder:7b
-MODEL="${MODEL:-qwen2.5-coder:3b}"
+# pick the model: gemma3:4b (default, smaller/faster) or gemma2:9b
+MODEL="${MODEL:-gemma3:4b}"
 K8SGPT_VERSION="${K8SGPT_VERSION:-0.3.48}"
 VERSION="${VERSION:-local}"
 
 case "$MODEL" in
-    qwen2.5-coder:3b) DOCKERFILE=Dockerfile.qwen2.5-coder-3b; SUFFIX=qwen2.5-coder-3b ;;
-    qwen2.5-coder:7b) DOCKERFILE=Dockerfile.qwen2.5-coder-7b; SUFFIX=qwen2.5-coder-7b ;;
-    *) echo "Unsupported MODEL '$MODEL' (use qwen2.5-coder:3b or qwen2.5-coder:7b)"; exit 1 ;;
+    gemma3:4b) DOCKERFILE=Dockerfile.gemma3-4b; SUFFIX=gemma3-4b ;;
+    gemma2:9b) DOCKERFILE=Dockerfile.gemma2-9b; SUFFIX=gemma2-9b ;;
+    *) echo "Unsupported MODEL '$MODEL' (use gemma3:4b or gemma2:9b)"; exit 1 ;;
 esac
 
 TAG="${TAG:-k8sgpt-ui:${VERSION}-${SUFFIX}}"

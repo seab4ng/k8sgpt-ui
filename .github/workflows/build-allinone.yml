@@ -5,8 +5,8 @@ name: build-allinone
 #
 # Triggers ONLY on a tag/release — a plain push to a branch does NOT build anything.
 # Each tag produces TWO images, one per model. For tag "1.0.0":
-#   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b
-#   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b
+#   sokushinbutsu/k8sgpt-ui:1.0.0-gemma3-4b
+#   sokushinbutsu/k8sgpt-ui:1.0.0-gemma2-9b
 # (a leading "v" in the tag is stripped, so "v1.0.0" -> "1.0.0-...")
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
@@ -27,12 +27,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - model: "qwen2.5-coder:3b"
-            suffix: "qwen2.5-coder-3b"
-            dockerfile: "Dockerfile.qwen2.5-coder-3b"
-          - model: "qwen2.5-coder:7b"
-            suffix: "qwen2.5-coder-7b"
-            dockerfile: "Dockerfile.qwen2.5-coder-7b"
+          - model: "gemma3:4b"
+            suffix: "gemma3-4b"
+            dockerfile: "Dockerfile.gemma3-4b"
+          - model: "gemma2:9b"
+            suffix: "gemma2-9b"
+            dockerfile: "Dockerfile.gemma2-9b"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

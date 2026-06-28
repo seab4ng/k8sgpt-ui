@@ -1,21 +1,21 @@
 # ============================================================================
-#  ALL-IN-ONE image (qwen2.5-coder:3b): Ollama + model + k8sgpt + Streamlit UI.
+#  ALL-IN-ONE image (gemma3:4b): Ollama + model + k8sgpt + Streamlit UI.
 #  Build OUTSIDE airgap (needs internet + bakes the model into the image),
 #  then `docker save` -> carry the tar in -> `docker load` -> run.
 #
 #  Build:
-#    docker build -f Dockerfile.qwen2.5-coder-3b -t k8sgpt-ui:3b .
+#    docker build -f Dockerfile.gemma3-4b -t k8sgpt-ui:gemma3-4b .
 #  Run:
 #    docker run -d -p 8080:8080 \
 #      -e KUBECONFIG_B64="$(base64 -w0 ~/.kube/config)" \
-#      --name k8sgpt-ui k8sgpt-ui:3b
+#      --name k8sgpt-ui k8sgpt-ui:gemma3-4b
 #  Open: http://localhost:8080
 # ============================================================================
 FROM ollama/ollama:latest
 
 # --- versions (verify/bump) ---
 ARG K8SGPT_VERSION=0.3.48
-ARG MODEL=qwen2.5-coder:3b
+ARG MODEL=gemma3:4b
 ARG TARGETARCH=x86_64
 # app version shown in the UI; set by CI from the git tag (e.g. 1.0.0), "dev" otherwise
 ARG APP_VERSION=dev

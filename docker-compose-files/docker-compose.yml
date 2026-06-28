@@ -19,10 +19,10 @@ name: k8sgpt-ui
 services:
   k8sgpt-ui:
     # Images are published per release as <version>-<model>. Pick one:
-    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b   (default — smaller/faster)
-    #   sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-7b   (larger/higher quality)
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-gemma3-4b   (default — smaller/faster)
+    #   sokushinbutsu/k8sgpt-ui:1.0.0-gemma2-9b   (larger/higher quality)
     # Override the tag with the K8SGPT_UI_IMAGE env var.
-    image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:1.0.0-qwen2.5-coder-3b}
+    image: ${K8SGPT_UI_IMAGE:-sokushinbutsu/k8sgpt-ui:1.0.0-gemma3-4b}
     container_name: k8sgpt-ui
     ports:
       - "8080:8080"
@@ -41,4 +41,4 @@ services:
     # By default the container uses ALL host CPUs and RAM — leave commented for max
     # speed. Uncomment only to CAP usage.
     # cpus: 8          # >= 8 vCPU recommended for usable speed on CPU
-    # mem_limit: 8g    # 3B q4 needs ~3 GB resident; 7B q4 ~6 GB
+    # mem_limit: 8g    # 4B q4 needs ~3 GB resident; 9B q4 ~7 GB
