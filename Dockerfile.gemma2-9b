@@ -12,15 +12,30 @@
 #  Open: http://localhost:8080
 # ============================================================================
 
-# --- stage 1: build k8sgpt from source with current Go toolchain ---
+# --- stage 1: build k8sgpt from source with current Go + updated deps ---
 FROM golang:1.26-bookworm AS k8sgpt-builder
 ARG K8SGPT_VERSION=0.4.34
 RUN git clone --depth 1 --branch v${K8SGPT_VERSION} \
         https://github.com/k8sgpt-ai/k8sgpt.git /src/k8sgpt
 WORKDIR /src/k8sgpt
+# Update all Go module dependencies to latest compatible versions
+RUN go get -u ./... && go mod tidy
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/k8sgpt .
 
-# --- stage 2: final image ---
+# --- stage 2: rebuild ollama Go binary with patched Go + updated deps ---
+FROM golang:1.26-bookworm AS ollama-builder
+ARG OLLAMA_VERSION=0.30.11
+RUN git clone --depth 1 --branch v${OLLAMA_VERSION} \
+        https://github.com/ollama/ollama.git /src/ollama
+WORKDIR /src/ollama
+# Update vulnerable Go deps (x/crypto, x/net, jsonparser)
+RUN go get golang.org/x/crypto@latest \
+           golang.org/x/net@latest \
+           github.com/buger/jsonparser@latest \
+    && go mod tidy
+RUN CGO_ENABLED=1 go build -trimpath -buildmode=pie -o /usr/bin/ollama .
+
+# --- stage 3: final image ---
 FROM ollama/ollama:0.30.11
 
 # --- versions (verify/bump) ---
@@ -43,7 +58,8 @@ RUN apt-get update \
        python3 python3-pip python3-venv curl ca-certificates tar coreutils procps \
     && rm -rf /var/lib/apt/lists/*
 
-# --- k8sgpt binary (built from source in stage 1) ---
+# --- rebuilt binaries (patched Go + updated deps) ---
+COPY --from=ollama-builder /usr/bin/ollama /usr/bin/ollama
 COPY --from=k8sgpt-builder /usr/local/bin/k8sgpt /usr/local/bin/k8sgpt
 
 # --- python deps (system, no venv needed in container) ---
