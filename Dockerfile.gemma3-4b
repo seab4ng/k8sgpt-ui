@@ -29,8 +29,6 @@ RUN go mod edit -droprequire google.golang.org/grpc/stats/opentelemetry \
     && go mod edit \
        -replace github.com/containerd/containerd=github.com/containerd/containerd@v1.7.33 \
        -replace github.com/moby/spdystream=github.com/moby/spdystream@v0.5.1 \
-       -replace github.com/docker/docker=github.com/docker/docker@v29.3.1+incompatible \
-       -replace github.com/docker/cli=github.com/docker/cli@v29.2.0+incompatible \
        -replace github.com/prometheus/prometheus=github.com/prometheus/prometheus@v0.311.3 \
     && go mod tidy
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/k8sgpt .
