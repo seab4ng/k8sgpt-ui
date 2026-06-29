@@ -72,5 +72,5 @@ jobs:
           build-args: |
             MODEL=${{ matrix.model }}
             APP_VERSION=${{ steps.ver.outputs.value }}
-            K8SGPT_VERSION=0.3.48
+            K8SGPT_VERSION=0.4.34
           provenance: false
