@@ -18,14 +18,20 @@ ARG K8SGPT_VERSION=0.4.34
 RUN git clone --depth 1 --branch v${K8SGPT_VERSION} \
         https://github.com/k8sgpt-ai/k8sgpt.git /src/k8sgpt
 WORKDIR /src/k8sgpt
-# Surgically update only the deps with CRITICAL/HIGH CVEs; avoid cascading
-# k8s ecosystem updates that break controller-runtime / gnostic / prometheus.
+# 1) go get for deps that resolve cleanly via normal dependency resolution
+# 2) go mod edit -replace for deps where go get cascades and breaks the build
 RUN go mod edit -droprequire google.golang.org/grpc/stats/opentelemetry \
     && go get \
        golang.org/x/crypto@latest \
        golang.org/x/net@latest \
        github.com/go-git/go-git/v5@latest \
        google.golang.org/grpc@latest \
+    && go mod edit \
+       -replace github.com/containerd/containerd=github.com/containerd/containerd@v1.7.33 \
+       -replace github.com/moby/spdystream=github.com/moby/spdystream@v0.5.1 \
+       -replace github.com/docker/docker=github.com/docker/docker@v29.3.1+incompatible \
+       -replace github.com/docker/cli=github.com/docker/cli@v29.2.0+incompatible \
+       -replace github.com/prometheus/prometheus=github.com/prometheus/prometheus@v0.311.3 \
     && go mod tidy
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/k8sgpt .
 

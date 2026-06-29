@@ -1,0 +1,3 @@
+# Ollama auto-generates an ed25519 keypair on first run (ollama serve).
+# This is expected behaviour, not a leaked secret.
+private-key
