@@ -18,8 +18,21 @@ ARG K8SGPT_VERSION=0.4.34
 RUN git clone --depth 1 --branch v${K8SGPT_VERSION} \
         https://github.com/k8sgpt-ai/k8sgpt.git /src/k8sgpt
 WORKDIR /src/k8sgpt
-# Update all Go module dependencies to latest compatible versions
-RUN go get -u ./... && go mod tidy
+# Update vulnerable Go deps; drop absorbed sub-module to avoid ambiguous import
+RUN go mod edit -droprequire google.golang.org/grpc/stats/opentelemetry \
+    && go get \
+       google.golang.org/grpc@latest \
+       golang.org/x/crypto@latest \
+       golang.org/x/net@latest \
+       github.com/go-git/go-git/v5@latest \
+       github.com/docker/docker@latest \
+       github.com/containerd/containerd@latest \
+       github.com/opencontainers/runc@latest \
+       github.com/hashicorp/go-getter@latest \
+       github.com/hashicorp/go-retryablehttp@latest \
+       github.com/Azure/azure-sdk-for-go/sdk/azidentity@latest \
+       helm.sh/helm/v3@latest \
+    && go mod tidy
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/k8sgpt .
 
 # --- stage 2: rebuild ollama Go binary with patched Go + updated deps ---
