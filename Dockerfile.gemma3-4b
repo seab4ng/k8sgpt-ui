@@ -11,12 +11,20 @@
 #      --name k8sgpt-ui k8sgpt-ui:gemma3-4b
 #  Open: http://localhost:8080
 # ============================================================================
+
+# --- stage 1: build k8sgpt from source with current Go toolchain ---
+FROM golang:1.26-bookworm AS k8sgpt-builder
+ARG K8SGPT_VERSION=0.4.34
+RUN git clone --depth 1 --branch v${K8SGPT_VERSION} \
+        https://github.com/k8sgpt-ai/k8sgpt.git /src/k8sgpt
+WORKDIR /src/k8sgpt
+RUN CGO_ENABLED=0 go build -o /usr/local/bin/k8sgpt .
+
+# --- stage 2: final image ---
 FROM ollama/ollama:0.30.11
 
 # --- versions (verify/bump) ---
-ARG K8SGPT_VERSION=0.4.34
 ARG MODEL=gemma3:4b
-ARG TARGETARCH=x86_64
 # app version shown in the UI; set by CI from the git tag (e.g. 1.0.0), "dev" otherwise
 ARG APP_VERSION=dev
 
@@ -35,12 +43,8 @@ RUN apt-get update \
        python3 python3-pip python3-venv curl ca-certificates tar coreutils procps \
     && rm -rf /var/lib/apt/lists/*
 
-# --- k8sgpt binary ---
-RUN curl -fsSL -o /tmp/k8sgpt.tar.gz \
-       "https://github.com/k8sgpt-ai/k8sgpt/releases/download/v${K8SGPT_VERSION}/k8sgpt_Linux_${TARGETARCH}.tar.gz" \
-    && tar -xzf /tmp/k8sgpt.tar.gz -C /usr/local/bin k8sgpt \
-    && chmod +x /usr/local/bin/k8sgpt \
-    && rm /tmp/k8sgpt.tar.gz
+# --- k8sgpt binary (built from source in stage 1) ---
+COPY --from=k8sgpt-builder /usr/local/bin/k8sgpt /usr/local/bin/k8sgpt
 
 # --- python deps (system, no venv needed in container) ---
 COPY ui/requirements.txt /app/requirements.txt
